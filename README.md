@@ -2,6 +2,8 @@
 
 This code accompanies the manuscript: Geiss, A., Ma, P-L, Singh, B., and Hardin, J. C., (2022) "Emulating Aerosol Optics with Randomly Generated Neural Networks"
 
+[![DOI](https://zenodo.org/badge/508153694.svg)](https://zenodo.org/badge/latestdoi/508153694)
+
 **Abstract:** *Atmospheric aerosols have a substantial impact on climate and remain one of the largest sources of uncertainty in
 climate forecasts. Accurate representation of their direct radiative effects is a crucial component of modern climate models.
 Direct computation of the radiative properties of aerosols is far too computationally expensive to perform in a climate model
