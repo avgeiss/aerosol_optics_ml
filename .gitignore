@@ -1,0 +1,7 @@
+
+/data
+/data/*
+/figures/*.pptx
+/figures/*.odp
+archived.tar.gz
+data.zip
