@@ -1,5 +1,6 @@
-**This code accompanies the manuscript:**
-Geiss, A., Ma, P-L, Singh, B., and Hardin, J. C., (2022) "Emulating Aerosol Optics with Randomly Generated Neural Networks"
+## About
+
+This code accompanies the manuscript: Geiss, A., Ma, P-L, Singh, B., and Hardin, J. C., (2022) "Emulating Aerosol Optics with Randomly Generated Neural Networks"
 
 
 ## Required Packages
