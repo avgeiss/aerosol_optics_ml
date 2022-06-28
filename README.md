@@ -18,8 +18,11 @@ in climate models that cannot be captured through simple expansion of the existi
 ## Required Packages
 
 -PyMieScatt (1.8.1.1)
+
 -numpy (1.19.5)
+
 -netCDF4 (1.5.4)
+
 -tensorflow (2.7.0)
 
 ## Python Scripts
