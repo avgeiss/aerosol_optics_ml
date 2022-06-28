@@ -2,14 +2,14 @@
 Geiss, A., Ma, P-L, Singh, B., and Hardin, J. C., (2022) "Emulating Aerosol Optics with Randomly Generated Neural Networks"
 
 
-##Required Packages
+## Required Packages
 
 -PyMieScatt (1.8.1.1)
 -numpy (1.19.5)
 -netCDF4 (1.5.4)
 -tensorflow (2.7.0)
 
-##Python Scripts
+## Python Scripts
 
 **cam_aero_optics.py** A Python implementation of the CAM5 aerosol optics parameterization described in Ghan and Zaveri, JGR, 2007.
 
@@ -34,7 +34,7 @@ Geiss, A., Ma, P-L, Singh, B., and Hardin, J. C., (2022) "Emulating Aerosol Opti
 **train_final.py** Performs a final round of training on select ANN architectures. Uses both the training and validation datasets and trains for twice as long.
 			
 			
-##Directories
+## Directories
 			
 **./data/** directory where scripts expect data to be stored. an image of this directory at the time of initial submission of this project for publication is available through Zenodo:  https://doi.org/10.5281/zenodo.6762700
 
