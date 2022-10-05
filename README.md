@@ -60,3 +60,4 @@ in climate models that cannot be captured through simple expansion of the existi
 
 **./plotting_scripts/** Contains python scripts used to generate Figures 2, 4, and 5 in the manuscript
 
+**./mie_codes/** Archives copies of the miev0.f and mie.py scripts used to perform Mie scattering calculations. Currently, the full PyMieScatt package is available [here](https://github.com/bsumlin/PyMieScatt) (Accessed Feb 8th 2022), and miev0 can be found [here](https://www.cesm.ucar.edu/models/cesm1.0/cesm/cesmBbrowser/html_code/cam/miesubs.F.html##MIEV0) (Accessed April 25th 2022).
