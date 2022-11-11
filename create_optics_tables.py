@@ -56,11 +56,15 @@ def ref_ind_range(spect_region,nrefr,nrefi,band):
     refr = np.linspace(*rbounds,nrefr)
     return refr, refi
 
-def modal_optics_table(nrefr=128,nrefi=128,nrad=2048,ndist=256):
+def modal_optics_table(nrefr=128,nrefi=128,nrad=2048,ndist=256,test_dataset=False):
     #file name suffix
     suffix = str(nrefr) + ',' + str(nrefi) + ',' + str(nrad) + ',' + str(ndist)
+    if test_dataset:
+        suffix = str((nrefr-1)//2) + ',' + str((nrefi-1)//2) + ',' + str(nrad) + ',' + str((ndist-1)//2) + '_test_set'
     rmmin, rmmax = utils.rm_range
     rs = np.exp(np.linspace(np.log(rmmin),np.log(rmmax),ndist))
+    if test_dataset:
+        rs = rs[1::2]
     
     for wl_region, wl_bands in zip(['sw','lw'],[utils.SW_BANDS, utils.LW_BANDS]):
         optics_table = []
@@ -74,6 +78,9 @@ def modal_optics_table(nrefr=128,nrefi=128,nrad=2048,ndist=256):
             rmin, rmax = utils.r_range
             radii = np.exp(np.linspace(np.log(rmin),np.log(rmax),nrad))
             refr, refi = ref_ind_range(wl_region,nrefr,nrefi,band)
+            if test_dataset:
+                refr = refr[1::2]
+                refi = refi[1::2]
             qabs, qsca, g = parallel_mie(radii, wavelengths[band], refr, refi)
         
             #integrate over size distributions:
@@ -83,7 +90,7 @@ def modal_optics_table(nrefr=128,nrefi=128,nrad=2048,ndist=256):
             
         #save the tables:
         np.savez(utils.data_dir + 'optics_tables/' + wl_region + '/' + suffix,
-                 optics=np.array(optics_table,dtype='float16').transpose((1,2,0,3,4,5)), 
+                 optics=np.array(optics_table,dtype='float32').transpose((1,2,0,3,4,5)), 
                  wavelengths=wavelengths, params=['abs','ext','asm'],
                  mode=np.arange(4), ref_index_real=np.array(refrs),
                  ref_index_imag=np.array(refis), surf_mode_radius = rs)
@@ -95,3 +102,4 @@ if __name__ ==  '__main__':
     modal_optics_table(nrefr=33 ,nrefi=33 ,nrad=513 ,ndist=65)
     modal_optics_table(nrefr=65 ,nrefi=65 ,nrad=1025,ndist=129)
     modal_optics_table(nrefr=129,nrefi=129,nrad=2049,ndist=257)
+    modal_optics_table(nrefr=257,nrefi=257,nrad=2049,ndist=513,test_dataset=True)

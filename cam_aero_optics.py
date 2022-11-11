@@ -171,6 +171,9 @@ def modal_optics(refr,refi,rs,mode,band,wl_region,mass_scaling=True,nrad=200):
     #do chebyshev interpolation with respect to surface mode radius:
     absp, extp, asym = [cheb_interp(c,rsc) for c in coefs]
     extp = np.exp(extp)
+    absp = np.clip(absp,0,5)
+    extp = np.clip(extp,0,5)
+    asym = np.clip(asym,0,1)
     
     #multiply by the integrated particle mass to get bulk abs and ext efficiencies:
     if mass_scaling:

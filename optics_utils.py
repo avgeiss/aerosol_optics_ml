@@ -59,18 +59,19 @@ def modal_int_lognorm(qabs, qsca, g, radii, rs, mass_scaling=False):
     
     for m in range(len(alnsg_amode)):       #iterate over the aerosol modes
         for n in range(ndist):              #iterate over the size distributions
+            C = 1/(alnsg_amode[m]*np.sqrt(np.pi*2))
             ds = np.exp(-0.5*(np.log(radii/rs[n])/alnsg_amode[m])**2)*dlogr
-            masswet = rho_h2o*np.sum(radii[0,0,:]*ds[0,0,:])*4/3
-            sumabs = np.sum(qabs*ds,axis=-1)
-            sumsca = np.sum(qsca*ds,axis=-1)
-            modal_asm[m,...,n] = np.sum(g*qsca*ds,axis=-1)/sumsca
+            masswet = C*rho_h2o*np.sum(radii[0,0,:]*ds[0,0,:])*4/3
+            sumabs = C*np.sum(qabs*ds,axis=-1)
+            sumsca = C*np.sum(qsca*ds,axis=-1)
+            modal_asm[m,...,n] = C*np.sum(g*qsca*ds,axis=-1)/sumsca
             modal_abs[m,...,n] = sumabs
             modal_ext[m,...,n] = sumsca+sumabs
             if mass_scaling:
                 modal_abs[m,...,n] /= masswet
                 modal_ext[m,...,n] /= masswet
     
-    return modal_abs, modal_ext, modal_asm    
+    return modal_abs, modal_ext, modal_asm
     
 #loads the refractive indices of water used by RRTMG:
 def read_water_refindex(spect_region):
