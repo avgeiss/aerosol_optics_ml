@@ -41,8 +41,8 @@ def lr_schedule(epoch,lr):
 
 print('Loading Data',flush=True)
 import numpy as np
-inputs = np.load('./data/training/' + wvl_region + '_inputs.npy')[:6_400,:]
-targets = np.load('./data/training/' + wvl_region + '_targets.npy')[:6_400,...]
+inputs = np.load('./data/training/' + wvl_region + '_inputs.npy')
+targets = np.load('./data/training/' + wvl_region + '_targets.npy')
 
 print('Training',flush=True)
 ann.fit(inputs,targets,batch_size = 64,verbose=2,epochs=10,
