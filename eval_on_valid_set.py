@@ -4,65 +4,46 @@
 #
 #Evaluates the various optics ANNs on the validation data
 
-import os
-os.environ['CUDA_VISIBLE_DEVICES'] = ''
 from glob import glob
 from tensorflow.keras.models import load_model
 import numpy as np
 import gc
 
-
 def validate_random_anns(wvl):
-    inputs = np.load('./data/training_data/' + wvl + '_inputs_test.npy')
-    targets = np.load('./data/training_data/' + wvl + '_targets_test.npy')
-    if not wvl == 'sw':
-        targets = targets[:,np.newaxis]
-    
-    anns = glob('./data/anns/random_' + wvl + '/*.ann')
-    anns.sort()
+    inputs = np.double(np.load('./data/validation/' + wvl + '_inputs.npy'))
+    targets = np.double(np.load('./data/validation/' + wvl + '_targets.npy'))
+    anns = sorted(glob('./data/anns/' + wvl + '/random/*'))
     params, names, errors = [], [], []
     for ann_file in anns:
-        name = ann_file.split('/')[-1].split('.')[0]
-        print('Evaluating ann ' + str(anns.index(ann_file)) + ': ' + name)
+        names.append(ann_file.split('/')[-1].split('.')[0])
         model = load_model(ann_file)
-        outputs = model.predict(inputs,verbose=True,batch_size=10_000)
-        error = np.mean(np.abs(outputs-targets))
-        print('Error: ' + str(error))
-        errors.append(error)
+        outputs = model.predict(inputs,batch_size=2**16,verbose=False).squeeze()
+        errors.append(np.mean(np.abs(outputs-targets)))
         params.append(model.count_params())
-        names.append(name)
-    np.savez('./data/predictions/validation/' + wvl + '_validation',name = names,params = params,error = errors)
+        print('Evaluating ann ' + ann_file.split('/')[-1] + ': ' + str(errors[-1]))
+        del model
+        gc.collect()
+    np.savez('./data/evaluation/validation_' + wvl + '_random.npz',name = names,params = params,error = errors)
 
 def validate_benchmark_anns(wvl):
-    inputs = np.load('./data/training_data/' + wvl + '_inputs_test.npy')
-    targets = np.load('./data/training_data/' + wvl + '_targets_test.npy')
-    sizes = np.array([500,1000,2500,5000,7500,10_000,15_000,25_000,50_000,100_000])
-    layers = [1,2,3,4,5,6]
-    
-    layer_dim = []
-    for l in layers:
-        size_dim = []
-        for s in sizes:
-            ann_files = glob('./data/anns/benchmark_' + wvl + '/P' + str(s) + '_L' + str(l) + '*.ann')
-            errors = np.nan*np.ones(shape=(5,))
-            for i_file in range(min(len(ann_files),5)):
-                fname = ann_files[i_file]
-                print(fname)
-                ann = load_model(ann_files[i_file])
-                outputs = ann.predict(inputs,batch_size=100_000)
-                if outputs.shape[1]>1 and wvl != 'sw':
-                    outputs = outputs[:,1]
-                errors[i_file] = np.mean(np.abs(outputs.squeeze()-targets))
+    inputs = np.double(np.load('./data/validation/' + wvl + '_inputs.npy'))
+    targets = np.double(np.load('./data/validation/' + wvl + '_targets.npy'))
+    params = np.array([500,1000,2500,5000,7500,10_000,15_000,20_000,50_000,100_000])
+    layers = [2,3,4,5,6]
+    errors = np.zeros([5,10,5])
+    for ilayers in range(len(layers)):
+        for iparams in range(len(params)):
+            files = glob('./data/anns/' + wvl + '/benchmark/L' + str(layers[ilayers]) + '_P' + str(params[iparams]) + '_*')
+            for ifiles in range(len(files)):
+                print(files[ifiles])
+                ann = load_model(files[ifiles])
+                outputs = ann.predict(inputs,batch_size=2**16).squeeze()
+                errors[ilayers,iparams,ifiles] = np.mean(np.abs(outputs-targets))
                 del ann
                 gc.collect()
-            size_dim.append(errors)
-        layer_dim.append(size_dim)
-    
-    errors = np.array(layer_dim)
-    np.save('./predictions/validation/bench_valid_errors_' + wvl + '.npy',errors)
+    np.save('./data/evaluation/validation_' + wvl + '_benchmark.npy',errors)
 
-
-if __name__ == '__main__':
-    for wvl in ['sw','lw1','lw2']:
-        validate_random_anns(wvl)
-        validate_benchmark_anns(wvl)
+validate_benchmark_anns('sw')
+validate_benchmark_anns('lw')
+validate_random_anns('sw')
+validate_random_anns('lw')

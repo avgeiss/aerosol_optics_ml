@@ -1,7 +1,9 @@
 
-/data
+
 /data/*
-/figures/*.pptx
-/figures/*.odp
+/figures/*
+/plotting_scripts/*
 archived.tar.gz
-data.zip
+/manuscript/*
+/ancillary/*
+/__pycache__
