@@ -9,6 +9,7 @@ import numpy as np
 import optics_utils as utils
 from multiprocess import Pool
 from os.path import exists as check_path
+from numba import njit
 
 #vectorizes input particle properties and does Mie calculations in parallel:
 def parallel_mie(radii, wavelength, refr, refi):
@@ -94,30 +95,30 @@ def gen_optics_table(nrefr=7, nrefi=10, nrad=200, ndist=30):
                  ref_index_imag=np.array(refis), surf_mode_radius = rs)
         
 #function to do 2-D interpolation of chebyshev coefficients
+@njit
+def linterp_weights(x,q):
+    for i in range(len(x)):
+        if x[i] == q:
+            return 0.5,0.5,i,i
+        if x[i]>q:
+            dx = x[i]-x[i-1]
+            return i-1,i,(x[i]-q)/dx,(q-x[i-1])/dx
+
+@njit
 def binterp(refr, refi, queryr, queryi, coefs):
-    
-    def linterp_weights(x,q):
-        assert q>=np.min(x) and q<=np.max(x)        #throw an error if the query point is out of range
-        if q in x:                                  #check to see if the query point exactly matches a grid point
-            weights = [0.5,0.5]
-            inds = [np.where(q==x)[0][0]]*2
-        else:
-            inds = [np.where(q>x)[0][-1], np.where(q<x)[0][0]]
-            weights = np.array([x[inds[1]]-q, q-x[inds[0]]])/(x[inds[1]]-x[inds[0]])
-            weights /= np.sum(weights)
-        return weights, inds
-    
-    assert queryr <= np.max(refr) and queryr >= np.min(refr)
-    assert queryi <= np.max(refi) and queryi >= np.min(refi)
-    wr,indr = linterp_weights(refr,queryr)
-    wi,indi = linterp_weights(refi,queryi)
-    c = ((coefs[indr[0],indi[0],:]*wr[0] + 
-          coefs[indr[1],indi[0],:]*wr[1])*wi[0] + 
-         (coefs[indr[0],indi[1],:]*wr[0] + 
-          coefs[indr[1],indi[1],:]*wr[1])*wi[1])
+    assert queryr <= refr[-1] and queryr >= refr[0]
+    assert queryi <= refi[-1] and queryi >= refi[0]
+    i0r,i1r,w0r,w1r = linterp_weights(refr,queryr)
+    i0i,i1i,w0i,w1i = linterp_weights(refi,queryi)
+    i0r = int(i0r); i1r = int(i1r); i0i = int(i0i); i1i = int(i1i)
+    c = ((coefs[i0r,i0i,:]*w0r + 
+          coefs[i1r,i0i,:]*w1r)*w0i + 
+          (coefs[i0r,i1i,:]*w0r + 
+          coefs[i1r,i1i,:]*w1r)*w1i)
     return c
 
 #performs chebyshev interpolation given coefficients in c for the point x in [-1,1]
+@njit
 def cheb_interp(c,x):
     assert x>=-1 and x<=1
     #evaluate the chebyshev polynomials (T):
@@ -135,7 +136,7 @@ sw_table = np.load(utils.data_dir + 'optics_tables/sw/cheb_coefs_cam.npz')
 lw_table = np.load(utils.data_dir + 'optics_tables/lw/cheb_coefs_cam.npz')
 
 #assign the data into dictionaries:
-chebyshev_coefficients = {'sw': sw_table['cheb_coefs'], 'lw': lw_table['cheb_coefs']}
+chebyshev_coefficients = {'sw': np.float64(sw_table['cheb_coefs']), 'lw': np.float64(lw_table['cheb_coefs'])}
 refractive_indices = {'sw': {'real': sw_table['ref_index_real'], 'imag': sw_table['ref_index_imag']},
                       'lw': {'real': lw_table['ref_index_real'], 'imag': lw_table['ref_index_imag']}}
 
@@ -171,9 +172,6 @@ def modal_optics(refr,refi,rs,mode,band,wl_region,mass_scaling=True,nrad=200):
     #do chebyshev interpolation with respect to surface mode radius:
     absp, extp, asym = [cheb_interp(c,rsc) for c in coefs]
     extp = np.exp(extp)
-    absp = np.clip(absp,0,5)
-    extp = np.clip(extp,0,5)
-    asym = np.clip(asym,0,1)
     
     #multiply by the integrated particle mass to get bulk abs and ext efficiencies:
     if mass_scaling:
