@@ -3,249 +3,187 @@
 #Andrew Geiss, May 2022
 #
 #Evaluates the various optics schemes (chebyshev interpolation, lookup tables, 
-#and ANNs) on the randomly generated test data.
+#and ANNs) on the test data.
 
 import numpy as np
 from tqdm import tqdm
 from keras.models import load_model
-import keras.backend as K
 from cam_aero_optics import modal_optics
+from generate_train_set import standardize, one_hot
+from numba import njit
+ANN_NAMES = {'sw': '2272914092e14e71ba8b3398f9bdfd3c',
+                'lw': 'eae77c85f3e54c09a836ff613d546c6f'}
 
+#computes the scattering and SSA
+def compute_scattering(x):
+    #ensure absorption does not exceed extinction
+    swap = x[:,0]>x[:,1]
+    x[swap,1] = x[swap,0]
+    #compute scattering
+    qs = x[:,1]-x[:,0]
+    #compute SSA
+    ssa = qs/x[:,1]
+    ssa[x[:,1]<0.01] = np.nan
+    ssa = np.clip(ssa,0,1)
+    return np.concatenate([x,qs[:,np.newaxis],ssa[:,np.newaxis]],axis=-1)
 
-def sci_notation(x):
-    pow10 = np.log10(x)
-    pow10 = np.floor(pow10)
-    x = x*10**-pow10
-    return x, int(pow10)
+#load the test dataset:
+def load_testing_data(wvl_region):
+    nax = np.newaxis
+    # dataset = np.load('./data/optics_tables/' + wvl_region + '/16,16,513,32_test_set.npz')#for fast testing
+    dataset = np.load('./data/optics_tables/' + wvl_region + '/128,128,2049,256_test_set.npz')
+    optics = dataset['optics']
+    shape = optics.shape[1:]
+    if wvl_region == 'sw':
+        optics = optics.transpose((1,2,3,4,5,0)).reshape((np.prod(shape),3))
+        optics = compute_scattering(optics)
+    else:
+        optics = optics[0,...].flatten()
+    inputs = np.zeros(shape + (5,),dtype='float32')
+    inputs[...,0] = np.broadcast_to(dataset['mode'][:,nax,nax,nax,nax],shape)
+    inputs[...,1] = np.broadcast_to(dataset['wavelengths'][nax,:,nax,nax,nax],shape)
+    inputs[...,2] = np.broadcast_to(dataset['ref_index_real'][nax,:,:,nax,nax],shape)
+    inputs[...,3] = np.broadcast_to(dataset['ref_index_imag'][nax,:,nax,:,nax],shape)
+    inputs[...,4] = np.broadcast_to(dataset['surf_mode_radius'][nax,nax,nax,nax,:],shape)
+    inputs = inputs.reshape((np.prod(shape),5))
+    return inputs, optics
 
-###############################################################################
-#                 Evaluate the lookup tables on the test set                  #
-###############################################################################
-def linterp_weights(query,neighbors):
-    n1,n2 = neighbors
-    if query == n1:
-        return 1,0
-    elif query == n2:
-        return 0,1
-    assert query>n1 and query < n2
-    d1 = abs(query-n1)
-    d2 = abs(query-n2)
-    w1 = (1-d1/(d1+d2))
-    w2 = (1-d2/(d1+d2))
-    return w1,w2
+def compute_ground_truth(wvl_region):
+    _, optics = load_testing_data(wvl_region)
+    np.save('./data/evaluation/test_' + wvl_region + '_mie.npy',optics)
 
-#a function to do the tri-linear interpolation:
-def trinterp(query,axes,table):
-    #get the hypercube around the query point
-    idxs = []
-    for a in range(3):
-        idxs.append(np.where(axes[a] > query[a])[0][0]-1)
-    cube = table[idxs[0]:idxs[0]+2,idxs[1]:idxs[1]+2,idxs[2]:idxs[2]+2]
-    for a in range(3):
-        w1,w2 = linterp_weights(query[a], axes[a][idxs[a]:idxs[a]+2])
-        cube = cube[0,...]*w1 + cube[1,...]*w2
-    return cube    
+def compute_cheb_interp_errors(wvl_region):
+    print('Testing ' + wvl_region + ' EAM scheme...')
+    band_wvls = list(np.float32(np.load('./data/optics_tables/' + wvl_region + '/33,33,513,65.npz')['wavelengths']))
+    inputs,optics = load_testing_data(wvl_region)
+    outputs = np.zeros((optics.shape[0],3),dtype='float32')
+    for i in tqdm(range(inputs.shape[0])):
+        mode,wvl,refr,refi,rs = inputs[i,:]
+        outputs[i,:] = modal_optics(refr, refi, rs, int(mode), band_wvls.index(wvl), wvl_region, mass_scaling=False)
+    if wvl_region=='sw':
+        outputs = compute_scattering(outputs)
+    else:
+        outputs = outputs[:,0]
+    np.save('./data/evaluation/test_' + wvl_region + '_cheb.npy',outputs)
 
+def compute_ann_errors(wvl_region):
+    print('Testing ' + wvl_region + ' ann...')
+    inputs,_ = load_testing_data(wvl_region)
+    mode, wvl, refr, refi, rs = [inputs[:,i] for i in range(5)]
+    refi += 1E-6
+    rssp = rs/wvl
+    wvl, refr, refi, rssp, rs = [standardize(data, varname, wvl_region) for data, varname in 
+                                 zip([wvl,refr,refi,rssp,rs], ['wavelength','refr','refi','rssp','rs'])]
+    mode = one_hot(mode)
+    inputs = np.stack([inp_var for inp_var in [wvl, refr, refi, rssp, rs]],axis=1)
+    inputs = np.concatenate([inputs,mode],axis=1)
+    ann = load_model('./data/anns/' + wvl_region + '/random/' + ANN_NAMES[wvl_region])
+    outputs = ann.predict(inputs,batch_size=2**14)
+    if wvl_region == 'sw':
+        scales = np.array([1.6,3.4,1.0])
+        outputs *= scales[np.newaxis,:]
+        outputs = compute_scattering(outputs)
+    else:
+        outputs = 1.6*outputs.squeeze()
+    np.save('./data/evaluation/test_' + wvl_region + '_ann.npy',outputs)
 
-def compute_table_interp_errors():
-    latex_table = []
-    print('Computing Lookup Table Errors...')
-    for table_name in ['9,17,257,33','33,33,513,65','65,65,1025,129','129,129,2049,257']:
-        latex_table_row = []
-        ax_sz = [int(sz) for sz in table_name.split(',')]
-        ax_sz = np.delete(ax_sz,2)
-        param_count = np.prod(ax_sz)*14*4*3 + np.prod(ax_sz)*16*4
-        print('Table Dimensions: ' + table_name)
-        print('Total Parameters: ' + '{:.1e}'.format(param_count))
-        latex_table_row.append(param_count)
-        for wvl_region in ['sw','lw']:
-            print(wvl_region + ' table...')
-            #test data columns: wavelength, irefr, irefi, rs, mode, abs, ext, asym
-            test = np.load('./data/testing_data/' + wvl_region + '.npy')
-            if wvl_region == 'sw':
-                test_targets = test[:,-3:]
-            else:
-                test_targets = test[:,-3]
-            test_inputs = test[:,:-3]
-            
-            #load the optics table:
-            table = np.load('./data/optics_tables/' + wvl_region + '/' + table_name + '.npz')
-            table_optics = table['optics']
-            irefr, irefi = table['ref_index_real'], table['ref_index_imag']
-            rs, wavelengths = table['surf_mode_radius'], table['wavelengths']
-            
-            #do absorption predictions:
-            predictions = []
-            for i in tqdm(range(test_targets.shape[0])):
-                mode_num = int(test_inputs[i,-1])
-                wvl_num = np.where(test_inputs[i,0] == wavelengths)[0][0]
-                query = test_inputs[i,1:-1]
-                axes = (irefr[wvl_num,:],irefi[wvl_num,:],rs)
-                if wvl_region == 'sw':
-                    pred = [trinterp(query,axes,table_optics[param,mode_num,wvl_num,...]) for param in range(3)]
-                else:
-                    pred = trinterp(query,axes,table_optics[0,mode_num,wvl_num,...])
-                predictions.append(pred)
-            predictions = np.array(predictions)
-            np.save('./data/predictions/test/' + wvl_region + '_' + table_name + '.npy',predictions)
-            errors = np.mean(np.abs(predictions-test_targets),axis=0)
-            if wvl_region == 'sw':
-                latex_table_row.extend(list(errors))
-            else:
-                latex_table_row.append(errors)
-            print('errors: ' + str(errors) + '\n')
-        latex_table.append(latex_table_row)
-    print('\n\n\nGenerating latex table rows...')
-    for row in latex_table:
-        txt = 'Table: & $'
-        for entry in row:
-            x,p = sci_notation(entry)
-            txt += str(np.round(x,1)) + '\\times 10^{' + str(p) + '}$ & $'
-        txt = txt[:-3] + '\\\\'
-        print(txt)
-        
+@njit
+def linterp_weights(query,rng):
+    assert query > rng[0] and query < rng[-1], 'query point outside of range'
+    i = 0
+    while rng[i+1] < query:
+        i += 1
+    w = (rng[i+1]-query)/(rng[i+1]-rng[i])
+    return i, (w,1-w)
 
+@njit
+def trinterp(cube,w1,w2,w3):
+    cube = cube[:,0,:,:]*w1[0] + cube[:,1,:,:]*w1[1]
+    cube = cube[:,0,:]*w2[0] + cube[:,1,:]*w2[1]
+    cube = cube[:,0]*w3[0] + cube[:,1]*w3[1]
+    return cube
 
-
-
-
-
-###############################################################################
-#                   Evaluate the ANNs on the test data                        #
-###############################################################################
-def eval_anns():
-    #the constants used here for input standardization are given in table A2 in the paper
-    param_count = 0
+def compute_table_errors(wvl_region, table_res):
+    print('Testing ' + wvl_region + ' ' + table_res + ' optics table...')
+    test_inputs, _ = load_testing_data(wvl_region)
+    N = test_inputs.shape[0]
+    table_dataset = np.load('./data/optics_tables/' + wvl_region + '/' + table_res + '.npz')
+    table_optics = table_dataset['optics']
+    wvls, refrs, refis, rss = [table_dataset[var_name] for var_name in 
+                                      ['wavelengths','ref_index_real','ref_index_imag','surf_mode_radius']]
+    wvl_inds = np.int16(np.argmin(np.abs(test_inputs[:,1:2] - wvls[np.newaxis,:]),axis=-1))
+    interped_optics = np.zeros((N,3),dtype='float32')
+    for i in tqdm(range(N)):
+        iw = wvl_inds[i]
+        im = int(test_inputs[i,0])
+        refr_idx, refr_w = linterp_weights(test_inputs[i,2],refrs[iw,:])
+        refi_idx, refi_w = linterp_weights(test_inputs[i,3],refis[iw,:])
+        rs_idx,   rs_w   = linterp_weights(test_inputs[i,4],rss)
+        interped_optics[i,:] = trinterp(table_optics[:,im,iw,refr_idx:refr_idx+2,refi_idx:refi_idx+2,rs_idx:rs_idx+2],
+                                        refr_w, refi_w, rs_w)
+    if wvl_region == 'sw':
+        interped_optics = compute_scattering(interped_optics)
+    else:
+        interped_optics = interped_optics[:,0]
+    np.save('./data/evaluation/test_' + wvl_region + '_' + table_res + '.npy',interped_optics)
     
-    #test data columns: wavelength, irefr, irefi, rs, mode, abs, ext, asym
-    test = np.load('./data/testing_data/sw.npy')
-    sw_targets = test[:,-3:]
-    inputs = [(np.log(test[:,0])+13.63357)/0.97014,
-              (test[:,1]-1.63148)/0.18825,
-              (np.log(test[:,2]+1E-6)+7.07294)/3.91970,
-              (np.log(test[:,3]/test[:,0])+0.87509)/2.46624,
-              (np.log(test[:,3])+14.50866)/2.26741,
-              test[:,4] == 0, test[:,4] == 1,test[:,4] == 2,test[:,4] == 3]
-    inputs = np.array(inputs).T
-    ann = load_model('./data/anns/sw.ann')
-    outputs = ann.predict(inputs,batch_size=2**15)
-    sw_pred = outputs*np.array([2.2,4.6,1.0])[np.newaxis,:]
-    param_count += np.sum([K.count_params(w) for w in ann.trainable_weights])
-    np.save('./data/predictions/test/sw_ann.npy',sw_pred)
+def compute_error_table():
+    sw_truth = np.double(np.load('./data/evaluation/test_sw_mie.npy'))
+    lw_truth = np.double(np.load('./data/evaluation/test_lw_mie.npy'))
+    errors = np.zeros((6,6))
+    model_names = ['ann','cheb','9,17,257,33','33,33,513,65','65,65,1025,129','129,129,2049,257']
+    for i in range(errors.shape[0]):
+        errors[i,:-1] = np.nanmean(np.abs(sw_truth-np.load('./data/evaluation/test_sw_' + model_names[i] + '.npy')),axis=0)
+        errors[i,-1] = np.nanmean(np.abs(lw_truth-np.load('./data/evaluation/test_lw_' + model_names[i] + '.npy')))
+    var_names = ['qabs','qext','g','qsca','SSA','qabs_lw']
+    np.savez('./data/evaluation/error_table.npz',errors = errors, columns = var_names, rows = model_names)
     
-    #break the longwave data up based on the two sets of longwave bands:
-    lwdata = np.load('./data/testing_data/lw.npy')
-    lw_bands = np.load('./data/optics_tables/lw/33,33,513,65.npz')['wavelengths']
-    lw2_bands = [lw_bands[i] for i in [0,1,6,7]]
-    lwdata1,lwdata2 = [],[]
-    for i in range(lwdata.shape[0]):
-        if lwdata[i,0] in lw2_bands:
-            lwdata2.append(lwdata[i,:])
-        else:
-            lwdata1.append(lwdata[i,:])
-    lwdata1 = np.array(lwdata1)
-    lwdata2 = np.array(lwdata2)
+def write_latex_table():
+    #generates the MAE table from the paper in latex notation
     
-    #evaluate the first set of SW bands
-    test = lwdata1[:,:-3]
-    inputs = [(np.log(test[:,0])+11.84149)/0.53403,
-              (test[:,1]-1.62030)/0.20075,
-              (np.log(test[:,2]+1E-6)+7.07294)/3.91970,
-              (np.log(test[:,3]/test[:,0])+2.66717)/2.32945,
-              (np.log(test[:,3])+14.50866)/2.26741,
-              test[:,4] == 0, test[:,4] == 1,test[:,4] == 2,test[:,4] == 3]
-    inputs = np.array(inputs).T
-    ann = load_model('./data/anns/lw1.ann')
-    outputs1 = ann.predict(inputs,batch_size=2**15).squeeze()*2.2
-    param_count += np.sum([K.count_params(w) for w in ann.trainable_weights])
+    def sci_notation(x):
+        pow10 = np.log10(x)
+        pow10 = np.floor(pow10)
+        x = x*10**-pow10
+        return x, int(pow10)
     
-    #evaluate the second set of longwave bands
-    test = lwdata2[:,:-3]
-    inputs = [(np.log(test[:,0])+10.34292)/1.64711,
-              (test[:,1]-2.02558)/0.40344,
-              (np.log(test[:,2]+1E-6)+6.99843)/3.92753,
-              (np.log(test[:,3]/test[:,0])+4.16574)/2.80253,
-              (np.log(test[:,3])+14.50866)/2.26741,
-              test[:,4] == 0, test[:,4] == 1,test[:,4] == 2,test[:,4] == 3]
-    inputs = np.array(inputs).T
-    ann = load_model('./data/anns/lw2.ann')
-    outputs2 = ann.predict(inputs,batch_size=2**15).squeeze()*2.2
-    param_count += np.sum([K.count_params(w) for w in ann.trainable_weights])
+    errors = np.load('./data/evaluation/error_table.npz')['errors']
+    lines = ['\\begin{center}','\\begin{tabular}{ccccccccc}','\hline', 
+              'Method & N-Params. & $\overline{Q}_{\\text{Abs.}}$ (SW) & $\overline{Q}_{\\text{Ext.}}$ ' + 
+              '(SW) & $\overline{g}$ (SW) & $\overline{Q}_{\\text{Sca.}}$ (SW) & $\overline{SSA}$ (SW) ' + 
+              '& $\overline{Q}_{\\text{Abs.}}$ (LW)\\\\',
+              '\hline']
+    model_names = ['ANN', '\cite{Ghan_2007}'] + ['Lookup Table']*4
+    params = list(range(4,10))
+    for i in range(len(model_names)):
+        line = model_names[i] + ': & $10^{' + str(params[i]) + '}$ '
+        for j in range(errors.shape[1]):
+            x, pow10 = sci_notation(errors[i,j])
+            line += '& $' + str(np.round(x,1)) + ' \\times 10^{' + str(pow10) + '}$ '
+        line += '\\\\'
+        lines.append(line)
+        if i == 1:
+            lines.append('\hline')
+    lines += ['\hline','\end{tabular}','\end{center}','\end{table}']
     
-    #re-combine the two sets of longwave bands:
-    lw_targets = lwdata[:,-3]
-    lw_pred = np.zeros(lw_targets.shape)
-    i1, i2 = 0,0
-    for i in range(lwdata.shape[0]):
-        if lwdata[i,0] in lw2_bands:
-            lw_pred[i] = outputs2[i2]
-            i2 += 1
-        else:
-            lw_pred[i] = outputs1[i1]
-            i1 += 1
-    lw_pred = np.array(lw_pred)
-    np.save('./data/predictions/test/lw_ann.npy',lw_pred)
-    
-    #generate the latex table:
-    x,p = sci_notation(param_count)
-    line = 'ANN: & $' + str(np.round(x,1)) + '\\times 10^{' + str(p) + '}$ & $'
-    errors = list(np.mean(np.abs(sw_targets-sw_pred),axis=0))
-    errors.append(np.mean(np.abs(lw_pred-lw_targets)))
-    for e in errors:
-        x,p = sci_notation(e)
-        line += str(np.round(x,1)) + '\\times 10^{' + str(p) + '}$ & $'
-    line = line[:-4] + ' \\\\'
-    print(line)
-    
+    file = open('./figures/table.txt','w')
+    for line in lines:
+        file.write(line + '\n')
+    file.close()
 
-
-###############################################################################
-#        Evaluate the Ghan and Zaveri algorithm on the test data              #
-###############################################################################
-def compute_cheb_interp_errors():
-    sw_bands = list(np.load('./data/optics_tables/sw/33,33,513,65.npz')['wavelengths'])
-    swdata = np.load('./data/testing_data/sw.npy')
-    targets = swdata[:,-3:]
-    inputs = list(swdata[:,:-3])
-    outputs = []
-    
-    #test data columns: wavelength, irefr, irefi, rs, mode, abs, ext, asym
-    for sample in tqdm(inputs):
-        wavelength, irefr, irefi, rs, mode = sample
-        band = sw_bands.index(wavelength)
-        pred = modal_optics(irefr, irefi, rs, int(mode), band, 'sw', mass_scaling=False)
-        outputs.append(pred)
-    outputs = np.array(outputs)
-    np.save('./data/predictions/test/sw_cheb.npy',outputs)
-    mae = list(np.mean(np.abs(outputs-targets),axis=0))
-    
-    lw_bands = list(np.load('./data/optics_tables/lw/33,33,513,65.npz')['wavelengths'])
-    lwdata = np.load('./data/testing_data/lw.npy')
-    targets = lwdata[:,-3]
-    inputs = list(lwdata[:,:-3])
-    outputs = []
-    
-    #test data columns: wavelength, irefr, irefi, rs, mode, abs, ext, asym
-    for sample in tqdm(inputs):
-        wavelength, irefr, irefi, rs, mode = sample
-        band = lw_bands.index(wavelength)
-        pred,_,_ = modal_optics(irefr, irefi, rs, int(mode), band, 'lw', mass_scaling=False)
-        outputs.append(pred)
-    outputs = np.array(outputs)
-    np.save('./data/predictions/test/lw_cheb.npy',outputs)
-    mae.append(np.mean(np.abs(outputs-targets)))
-    
-    #generate the latex table:
-    param_count = 7*10*5*(14*3 + 16)*4
-    x,p = sci_notation(param_count)
-    line = 'EAMv1/CAM5: & $' + str(np.round(x,1)) + '\\times 10^{' + str(p) + '}$ & $'
-    for e in mae:
-        x,p = sci_notation(e)
-        line += str(np.round(x,1)) + '\\times 10^{' + str(p) + '}$ & $'
-    line = line[:-4] + ' \\\\'
-    print(line)
-
-if __name__ == '__main__':
-    compute_table_interp_errors()
-    eval_anns()
-    compute_cheb_interp_errors()
+# compute_ground_truth('sw')
+# compute_ground_truth('lw')
+# compute_cheb_interp_errors('sw')
+# compute_cheb_interp_errors('lw')
+# compute_ann_errors('sw')
+# compute_ann_errors('lw')
+# compute_table_errors('sw', '9,17,257,33')
+# compute_table_errors('sw', '33,33,513,65')
+# compute_table_errors('sw', '65,65,1025,129')
+# compute_table_errors('sw', '129,129,2049,257')
+# compute_table_errors('lw', '9,17,257,33')
+# compute_table_errors('lw', '33,33,513,65')
+# compute_table_errors('lw', '65,65,1025,129')
+# compute_table_errors('lw', '129,129,2049,257')
+# compute_error_table()
+# errors = write_latex_table()
