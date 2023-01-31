@@ -12,7 +12,9 @@ from cam_aero_optics import modal_optics
 from generate_train_set import standardize, one_hot
 from numba import njit
 ANN_NAMES = {'sw': '2272914092e14e71ba8b3398f9bdfd3c',
-                'lw': 'eae77c85f3e54c09a836ff613d546c6f'}
+             'lw': 'eae77c85f3e54c09a836ff613d546c6f'}
+BENCH_NAMES = {'sw': 'L3_P20000_e759301ebf074facb4eafd45b7bee4e3',
+               'lw': 'L3_P5000_e149d701e4a34b09af5debebcf4c3c14'}
 
 #computes the scattering and SSA
 def compute_scattering(x):
@@ -66,7 +68,7 @@ def compute_cheb_interp_errors(wvl_region):
         outputs = outputs[:,0]
     np.save('./data/evaluation/test_' + wvl_region + '_cheb.npy',outputs)
 
-def compute_ann_errors(wvl_region):
+def compute_ann_errors(wvl_region, benchmark=False):
     print('Testing ' + wvl_region + ' ann...')
     inputs,_ = load_testing_data(wvl_region)
     mode, wvl, refr, refi, rs = [inputs[:,i] for i in range(5)]
@@ -77,7 +79,10 @@ def compute_ann_errors(wvl_region):
     mode = one_hot(mode)
     inputs = np.stack([inp_var for inp_var in [wvl, refr, refi, rssp, rs]],axis=1)
     inputs = np.concatenate([inputs,mode],axis=1)
-    ann = load_model('./data/anns/' + wvl_region + '/random/' + ANN_NAMES[wvl_region])
+    if benchmark:
+        ann = load_model('./data/anns/' + wvl_region + '/benchmark/' + BENCH_NAMES[wvl_region])
+    else:
+        ann = load_model('./data/anns/' + wvl_region + '/random/' + ANN_NAMES[wvl_region])
     outputs = ann.predict(inputs,batch_size=2**14)
     if wvl_region == 'sw':
         scales = np.array([1.6,3.4,1.0])
@@ -85,7 +90,10 @@ def compute_ann_errors(wvl_region):
         outputs = compute_scattering(outputs)
     else:
         outputs = 1.6*outputs.squeeze()
-    np.save('./data/evaluation/test_' + wvl_region + '_ann.npy',outputs)
+    if benchmark:
+        np.save('./data/evaluation/test_' + wvl_region + '_benchmark_ann.npy',outputs)
+    else:
+        np.save('./data/evaluation/test_' + wvl_region + '_ann.npy',outputs)
 
 @njit
 def linterp_weights(query,rng):
@@ -130,8 +138,8 @@ def compute_table_errors(wvl_region, table_res):
 def compute_error_table():
     sw_truth = np.double(np.load('./data/evaluation/test_sw_mie.npy'))
     lw_truth = np.double(np.load('./data/evaluation/test_lw_mie.npy'))
-    errors = np.zeros((6,6))
-    model_names = ['ann','cheb','9,17,257,33','33,33,513,65','65,65,1025,129','129,129,2049,257']
+    errors = np.zeros((7,6))
+    model_names = ['ann','benchmark_ann','cheb','9,17,257,33','33,33,513,65','65,65,1025,129','129,129,2049,257']
     for i in range(errors.shape[0]):
         errors[i,:-1] = np.nanmean(np.abs(sw_truth-np.load('./data/evaluation/test_sw_' + model_names[i] + '.npy')),axis=0)
         errors[i,-1] = np.nanmean(np.abs(lw_truth-np.load('./data/evaluation/test_lw_' + model_names[i] + '.npy')))
@@ -153,8 +161,8 @@ def write_latex_table():
               '(SW) & $\overline{g}$ (SW) & $\overline{Q}_{\\text{Sca.}}$ (SW) & $\overline{SSA}$ (SW) ' + 
               '& $\overline{Q}_{\\text{Abs.}}$ (LW)\\\\',
               '\hline']
-    model_names = ['ANN', '\cite{Ghan_2007}'] + ['Lookup Table']*4
-    params = list(range(4,10))
+    model_names = ['Random ANN', 'Serial ANN', '\cite{Ghan_2007}'] + ['Lookup Table']*4
+    params = [4] + list(range(4,10))
     for i in range(len(model_names)):
         line = model_names[i] + ': & $10^{' + str(params[i]) + '}$ '
         for j in range(errors.shape[1]):
@@ -185,5 +193,7 @@ def write_latex_table():
 # compute_table_errors('lw', '33,33,513,65')
 # compute_table_errors('lw', '65,65,1025,129')
 # compute_table_errors('lw', '129,129,2049,257')
+# compute_ann_errors('sw',benchmark=True)
+# compute_ann_errors('lw',benchmark=True)
 # compute_error_table()
 # errors = write_latex_table()
