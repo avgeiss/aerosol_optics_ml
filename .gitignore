@@ -1,7 +1,7 @@
 
 
 /data/*
-/figures/*
+/figures
 archived.tar.gz
 /plotting_scripts/pre_calced_histograms.npy
 /manuscript/*
