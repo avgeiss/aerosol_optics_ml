@@ -2,8 +2,8 @@
 
 /data/*
 /figures/*
-/plotting_scripts/*
 archived.tar.gz
+/plotting_scripts/pre_calced_histograms.npy
 /manuscript/*
 /ancillary/*
 /__pycache__
